@@ -4,3 +4,6 @@
 #include "xpm/stop.xpm"
 #include "xpm/stop_all.xpm"
 #include "xpm/sync.xpm"
+#include "xpm/play_music.xpm"
+#include "xpm/stop_music.xpm"
+#include "xpm/wave_editor.xpm"

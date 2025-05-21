@@ -1,7 +1,7 @@
 CXXFLAGS=-Wall -Wextra -O2 `wx-config --cflags`
 CXXFLAGS+=`sdl2-config --cflags`
-LDLIBS=`wx-config --libs` `sdl2-config --libs`
-OBJECTS=upsgrid.o filereader.o patchdata.o structdata.o
+LDLIBS=`wx-config --libs` `sdl2-config --libs` -lstdc++ -lm
+OBJECTS=uzebox-patch-studio.o upsgrid.o filereader.o patchdata.o structdata.o
 
 ifneq (, $(findstring MINGW, $(shell uname)))
 	LDLIBS+=-lSDL2_mixer
@@ -12,7 +12,6 @@ else
 	CXXFLAGS+=`pkg-config --cflags SDL2_mixer`
 	CXXFLAGS+=-std=c++14
 endif
-
 
 all: uzebox-patch-studio
 

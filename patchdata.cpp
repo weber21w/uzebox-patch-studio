@@ -177,7 +177,7 @@ bool PatchData::generate_wave(wxVector<uint8_t> &out_data) {
         /* Assumes the master volume is 0xff, no calculation needed */
 
         if (tremolo_level > 0) {
-          uint8_t t = ((uint8_t *) waves[0])[tremolo_pos];
+          uint8_t t =            waves_ram[0][tremolo_pos];
           t -= 128;
           uint16_t t_vol = (tremolo_level*t)+0x100;
           t_vol >>= 8;
@@ -202,7 +202,7 @@ bool PatchData::generate_wave(wxVector<uint8_t> &out_data) {
           sample = noise_barrel & 1? 127 : -128;
         }
         else {
-          sample = waves[wave][next_sample>>8];
+          sample = waves_ram[wave][next_sample>>8];
           next_sample += track_step;
         }
         int16_t v16 = (int16_t) sample * vol;

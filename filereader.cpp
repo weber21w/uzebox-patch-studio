@@ -1,11 +1,16 @@
 #include <wx/vector.h>
 #include <regex>
 #include <wx/string.h>
+#include <algorithm>    // for std::transform
+#include <cctype>       // for std::tolower
+#include <iterator>
 #include <fstream>
+#include <iomanip>
 #include <streambuf>
 #include <sstream>
 #include <map>
 #include "filereader.h"
+
 
 const std::map<wxString, long> FileReader::defines = {
   {"WAVE_SINE", 0},
@@ -48,6 +53,10 @@ const std::map<wxString, long> FileReader::defines = {
   {"PATCH_END", 15},
 };
 
+const std::regex FileReader::byte_line(
+  R"(^\s*\.byte\s*(.*))",
+  std::regex_constants::ECMAScript | std::regex_constants::icase
+);
 const std::regex FileReader::multiline_comments("/\\*(.|[\r\n])*?\\*/");
 const std::regex FileReader::singleline_comments("//.*");
 const std::regex FileReader::white_space("[\t\n\r]");
@@ -56,6 +65,8 @@ const std::regex FileReader::patch_declaration(
     "const char ([a-zA-Z_][a-zA-Z_\\d]*)\\[\\] PROGMEM ?= ?");
 const std::regex FileReader::struct_declaration(
     "const struct PatchStruct ([a-zA-Z_][a-zA-Z_\\d]*)\\[\\] PROGMEM ?= ?");
+static const std::regex music_decl(
+    R"(const\s+unsigned\s+char\s+([A-Za-z_][A-Za-z0-9_]*)\s*\[\]\s*=\s*\{)");
 
 long FileReader::string_to_long(const wxString &str) {
   if (defines.find(str) != defines.end())
@@ -204,4 +215,137 @@ bool FileReader::read_patches_and_structs(const wxString &fn,
   std::string clean_src = clean_code(src);
 
   return read_patches(clean_src, patches) && read_structs(clean_src, structs);
+}
+
+
+size_t FileReader::read_waves(const wxString &fn,
+                              WaveTable waves[],
+                              size_t maxWaves)
+{
+  // 1) Slurp entire file into a string
+  std::ifstream in(fn.mb_str(), std::ios::in | std::ios::binary);
+  if (!in.is_open()) return 0;
+  std::string src((std::istreambuf_iterator<char>(in)),
+                   std::istreambuf_iterator<char>());
+  in.close();
+
+  // 2) Strip out all C-style /* … */ blocks
+  src = std::regex_replace(src, multiline_comments, "");
+
+  // 3) Split into lines (handling both \r\n and \n)
+  std::vector<std::string> lines;
+  {
+    std::istringstream iss(src);
+    std::string line;
+    while (std::getline(iss, line)) {
+      if (!line.empty() && line.back() == '\r')
+        line.pop_back();
+      lines.push_back(std::move(line));
+    }
+  }
+
+  size_t waveIdx = 0;
+  std::vector<uint8_t> buffer;
+  buffer.reserve(WAVE_SIZE);
+
+  // 4) Scan each line for “.byte” directives
+  for (const auto &raw : lines) {
+    if (waveIdx >= maxWaves) break;
+
+    // 4a) Chop off any trailing ';' comment
+    auto semi = raw.find(';');
+    std::string line = (semi == std::string::npos
+                        ? raw
+                        : raw.substr(0, semi));
+
+    // 4b) Trim leading whitespace
+    auto first = line.find_first_not_of(" \t");
+    if (first == std::string::npos) continue;
+    line.erase(0, first);
+
+    // 4c) Case-insensitive check for ".byte"
+    if (line.size() < 5) continue;
+    std::string prefix = line.substr(0,5);
+    std::transform(prefix.begin(), prefix.end(), prefix.begin(),
+                   [](unsigned char c){ return std::tolower(c); });
+    if (prefix != ".byte") continue;
+
+    // 4d) Parse the comma-separated literals
+    std::string nums = line.substr(5);
+    std::istringstream ss(nums);
+    std::string tok;
+    while (std::getline(ss, tok, ',')) {
+      // trim whitespace around tok
+      auto a = tok.find_first_not_of(" \t");
+      auto b = tok.find_last_not_of(" \t");
+      if (a == std::string::npos) continue;
+      tok = tok.substr(a, b - a + 1);
+
+      // interpret as signed 8-bit, then shift to unsigned 0–255
+      long  rawVal      = std::stol(tok, nullptr, 0);
+      int8_t signedSample = static_cast<int8_t>(rawVal & 0xFF);
+      uint8_t u           = static_cast<uint8_t>(int(signedSample) + 128);
+
+      buffer.push_back(u);
+
+      // once we have WAVE_SIZE samples, commit one wave
+      if (buffer.size() == WAVE_SIZE) {
+        std::copy(buffer.begin(), buffer.end(),
+                  waves[waveIdx].begin());
+        buffer.clear();
+        ++waveIdx;
+        if (waveIdx >= maxWaves) break;
+      }
+    }
+  }
+
+  return waveIdx;
+}
+
+bool FileReader::write_waves(const wxString &fn,
+                             WaveTable waves[],
+                             size_t numWaves)
+{
+  std::ofstream out(fn.mb_str(), std::ios::out | std::ios::binary);
+  if (!out.is_open()) return false;
+
+  // Header comment
+  out << "/* Created by Uzebox Patch Studio: wavetable export */\n\n";
+
+  for (size_t w = 0; w < numWaves; ++w) {
+    // Comment for each wave
+    out << "; Wave #" << w << "\n";
+
+    // We break each wave into lines of 16 bytes
+    for (size_t i = 0; i < WAVE_SIZE; i += 16) {
+      out << "  .byte ";
+
+      for (size_t j = 0; j < 16 && (i + j) < WAVE_SIZE; ++j) {
+        // Invert your loader’s signed→unsigned shift:
+        // waves[w][i+j] is 0…255, but the loader expects two’s-complement bytes.
+        uint8_t u      = waves[w][i + j];
+        int8_t  s      = static_cast<int8_t>(int(u) - 128);
+        uint8_t rawVal = static_cast<uint8_t>(s);
+
+        // Emit as hex literal 0xNN
+        out << "0x"
+            << std::uppercase
+            << std::hex
+            << std::setw(2)
+            << std::setfill('0')
+            << int(rawVal);
+
+        // comma if not last in line
+        if (j + 1 < 16 && (i + j + 1) < WAVE_SIZE)
+          out << ",";
+      }
+
+      out << "\n";
+    }
+
+    out << "\n";
+  }
+
+  out.close();
+  return true;
 }

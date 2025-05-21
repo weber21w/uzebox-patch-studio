@@ -11,6 +11,9 @@
 #include <wx/textfile.h>
 #include <wx/sound.h>
 #include <wx/ffile.h>
+#include <wx/dcbuffer.h>
+#include <wx/slider.h>
+#include <wx/spinctrl.h>
 #include <algorithm>
 #include <map>
 #include <set>
@@ -22,9 +25,43 @@
 #include "patchdata.h"
 #include "structdata.h"
 #include "icons.h"
+#include "waves.h"
+
+
+// define the storage that waves.h merely declared:
+WaveTable waves_ram[MAX_WAVES];
+
+// now define the (DEFAULT_NUM_WAVES)built‑in pointer table:
+const int8_t *const builtin_waves[DEFAULT_NUM_WAVES] = {
+  sine_wave,
+  up_sawtooth_wave,
+  triangle_wave,
+  square_25_wave,
+  square_50_wave,
+  square_75_wave,
+  sine_disto1_wave,
+  sine_disto2_wave,
+  sine_disto3_wave,
+  filtered_50_square_wave,
+};
+
+namespace {
+struct WavesRamInitializer {
+  WavesRamInitializer() {
+    // 1) Copy the 10 built-ins
+    for (int w = 0; w < DEFAULT_NUM_WAVES; ++w) {
+      std::copy_n(builtin_waves[w], WAVE_SIZE, waves_ram[w].begin());
+    }
+    // 2) Silence (mid‐level 128) for all the rest
+    for (int w = DEFAULT_NUM_WAVES; w < MAX_WAVES; ++w) {
+      std::fill_n(waves_ram[w].begin(), WAVE_SIZE, 128);
+    }
+  }
+} _wavesRamInit;
+}
 
 #define MIN_CLIENT_HEIGHT 400
-#define VERSION_STRING "0.0.2"
+#define VERSION_STRING "0.0.4"
 
 class UPSApp: public wxApp {
   public:
@@ -36,7 +73,10 @@ class UPSFrame: public wxFrame {
   public:
     UPSFrame(const wxString &title, const wxPoint &pos, const wxSize &size);
     void open_file(const wxString &path, bool importing=false);
-
+    void open_music_file(const wxString &path);
+    void open_waves_file(const wxString &path);
+    void on_save_waves(wxCommandEvent &event);
+    void on_save_waves_as(wxCommandEvent &event);
   private:
     void on_new(wxCommandEvent &event);
     void on_exit(wxCommandEvent &event);
@@ -62,6 +102,12 @@ class UPSFrame: public wxFrame {
     void on_stop_all(wxCommandEvent &event);
     void on_remove(wxCommandEvent &event);
     void on_clone_data(wxCommandEvent &event);
+    void on_open_music(wxCommandEvent &event);
+    void on_start_music(wxCommandEvent &event);
+    void on_stop_music(wxCommandEvent &event);
+    void on_toggle_wave_editor(wxCommandEvent &event);
+    void on_zoom_slider(wxCommandEvent &event);
+    void on_open_waves(wxCommandEvent &event);
     void on_sync(wxCommandEvent &event);
     void on_export(wxCommandEvent &event);
     void on_help_shortcuts(wxCommandEvent &event);
@@ -92,6 +138,7 @@ class UPSFrame: public wxFrame {
     void read_struct_data(const wxTreeItemId &item);
     void replace_patch_in_structs(const wxString &src, const wxString &dst);
     void update_layout();
+    void show_bitmap(const wxBitmap &bmp);
     void sanitize_string(wxString &str);
     void replace_patch_in_struct(const wxTreeItemId &item,
         const wxString &src, const wxString &dst);
@@ -103,9 +150,26 @@ class UPSFrame: public wxFrame {
     wxTreeCtrl *data_tree;
     UPSGrid *patch_grid;
     UPSGrid *struct_grid;
+
+    wxScrolledWindow *bitmap_window = nullptr;
+    wxBitmap bitmap;
+    wxSlider  *zoom_slider;
+    float bitmap_scale = 1.0f;
+    bool dragging_bitmap = false;
+    wxPoint last_drag_point;
+
+    int              last_draw_index = -1;
+    int              last_draw_y     = 0;
+     int current_wave = 0;
+     void on_wave_count_spin(wxSpinEvent &evt);
+     /// how many waves are currently valid in waves_ram[]
+     int current_wave_count = DEFAULT_NUM_WAVES;  // default built-in count (10)
+    wxChoice *wave_choice;
+    wxSpinCtrl *wave_count_ctrl;
     wxBoxSizer *top_sizer;
     wxBoxSizer *right_sizer;
     wxString current_file_path;
+    wxString current_wave_path;
     std::set<wxString> patch_names = {wxT("NULL")};
 
     static const std::map<wxString, std::pair<long, long>> limits;
@@ -123,6 +187,8 @@ enum {
   ID_STOP,
   ID_STOP_ALL,
   ID_SYNC,
+  ID_START_MUSIC,
+  ID_STOP_MUSIC,
   ID_DATA_TREE,
   ID_NEW_PATCH,
   ID_NEW_STRUCT,
@@ -140,6 +206,13 @@ enum {
   ID_HELP_SHORTCUTS,
   ID_HELP_NOISE,
   ID_IMPORT,
+  ID_OPEN_MUSIC,
+  ID_OPEN_WAVES,
+  ID_SAVE_WAVES,
+  ID_SAVE_WAVES_AS,
+  ID_TOGGLE_WAVE_EDITOR,
+  ID_WAVE_COUNT,
+  ID_ZOOM_SLIDER
 };
 
 wxBEGIN_EVENT_TABLE(UPSFrame, wxFrame)
@@ -165,6 +238,13 @@ wxBEGIN_EVENT_TABLE(UPSFrame, wxFrame)
   EVT_MENU(ID_LOOP, UPSFrame::on_loop)
   EVT_MENU(ID_STOP, UPSFrame::on_stop)
   EVT_MENU(ID_STOP_ALL, UPSFrame::on_stop_all)
+  EVT_MENU(ID_OPEN_MUSIC, UPSFrame::on_open_music)
+  EVT_MENU(ID_START_MUSIC, UPSFrame::on_start_music)
+  EVT_MENU(ID_STOP_MUSIC, UPSFrame::on_stop_music)
+  EVT_MENU(ID_OPEN_WAVES, UPSFrame::on_open_waves)
+  EVT_MENU(ID_SAVE_WAVES,      UPSFrame::on_save_waves)
+  EVT_MENU(ID_SAVE_WAVES_AS,   UPSFrame::on_save_waves_as)
+  EVT_SPINCTRL(ID_WAVE_COUNT, UPSFrame::on_wave_count_spin)
   EVT_MENU(ID_SYNC, UPSFrame::on_sync)
   EVT_BUTTON(ID_REMOVE_DATA, UPSFrame::on_remove)
   EVT_BUTTON(ID_CLONE_DATA, UPSFrame::on_clone_data)
@@ -172,6 +252,8 @@ wxBEGIN_EVENT_TABLE(UPSFrame, wxFrame)
   EVT_MENU(ID_HELP_SHORTCUTS, UPSFrame::on_help_shortcuts)
   EVT_MENU(ID_HELP_NOISE, UPSFrame::on_help_noise)
   EVT_MENU(ID_IMPORT, UPSFrame::on_import)
+  EVT_TOOL(  ID_TOGGLE_WAVE_EDITOR, UPSFrame::on_toggle_wave_editor)
+  EVT_SLIDER(ID_ZOOM_SLIDER,        UPSFrame::on_zoom_slider)
 wxEND_EVENT_TABLE()
 wxIMPLEMENT_APP(UPSApp);
 
@@ -205,7 +287,7 @@ int UPSApp::OnExit() {
 const std::map<wxString, std::pair<long, long>> UPSFrame::limits = {
   {_("ENV_SPEED"), std::make_pair(-128, 127)},
   {_("NOISE_PARAMS"), std::make_pair(0, 255)},
-  {_("WAVE"), std::make_pair(0, NUM_WAVES-1)},
+  {_("WAVE"), std::make_pair(0, MAX_WAVES-1)},
   {_("NOTE_UP"), std::make_pair(0, 255)},
   {_("NOTE_DOWN"), std::make_pair(0, 255)},
   {_("NOTE_CUT"), std::make_pair(0, 0)},
@@ -275,13 +357,26 @@ UPSFrame::UPSFrame(const wxString &title, const wxPoint &pos,
     const wxSize &size) :
   wxFrame(NULL, wxID_ANY, title, pos, size),
   valid_var_name("^[a-zA-Z\\_][a-zA-Z\\_0-9]*$") {
+
+  // copy all the constant waves[] into editable RAM copies:
+
+  for(int w = 0; w < DEFAULT_NUM_WAVES; ++w) {
+    for(int i = 0; i < 256; ++i)
+      ::waves_ram[w][i] = static_cast<uint8_t>(builtin_waves[w][i] + 128);
+      // (+128 to convert int8_t [-128..127] into 0..255)
+  }
+
   wxMenu *menuFile = new wxMenu;
-  menuFile->Append(wxID_NEW);
-  menuFile->Append(wxID_OPEN);
-  menuFile->Append(wxID_SAVE);
-  menuFile->Append(wxID_SAVEAS);
-  menuFile->Append(ID_IMPORT, _("&Import file\tCTRL+SHIFT+I"));
-  menuFile->Append(ID_EXPORT, _("&Export to WAVE\tCTRL+SHIFT+E"));
+  menuFile->Append(wxID_NEW, _("&New patch file"));
+  menuFile->Append(wxID_OPEN, _("&Open patch file"));
+  menuFile->Append(wxID_SAVE, _("&Save patch file"));
+  menuFile->Append(wxID_SAVEAS, _("&Save patch file as.."));
+  menuFile->Append(ID_IMPORT, _("&Import patch file\tCTRL+SHIFT+I"));
+  menuFile->Append(ID_EXPORT, _("&Export patch to WAVE\tCTRL+SHIFT+E"));
+  menuFile->Append(ID_OPEN_MUSIC, _("&Open music file"));
+  menuFile->Append(ID_OPEN_WAVES, _("&Open waves file"));
+  menuFile->Append(ID_SAVE_WAVES,    _("&Save Wave File\tCtrl+W"));
+  menuFile->Append(ID_SAVE_WAVES_AS, _("Save Wave File &As...\tCtrl+Shift+W"));
   menuFile->AppendSeparator();
   menuFile->Append(wxID_EXIT);
   wxMenu *menuHelp = new wxMenu;
@@ -299,8 +394,47 @@ UPSFrame::UPSFrame(const wxString &title, const wxPoint &pos,
   toolbar->AddTool(ID_STOP, _("Stop"), wxBitmap(stop_xpm));
   toolbar->AddTool(ID_STOP_ALL, _("Stop All"), wxBitmap(stop_all_xpm));
   toolbar->AddTool(ID_SYNC, _("Sync Loops"), wxBitmap(sync_xpm));
+  toolbar->AddTool(ID_START_MUSIC,_("Start Music"), wxBitmap(playmusic_xpm));
+  toolbar->AddTool(ID_STOP_MUSIC,_("Stop Music"), wxBitmap(stop_music_xpm));
+//toolbar->AddSeparator();
+toolbar->AddTool(ID_TOGGLE_WAVE_EDITOR, _("Wave Editor"),
+                 wxBitmap(wave_editor_xpm), wxNullBitmap,
+                 wxITEM_CHECK, _("Wave Editor"), wxEmptyString);
+  
   toolbar->Realize();
+if (toolbar->FindById(ID_TOGGLE_WAVE_EDITOR)) {
+    toolbar->ToggleTool(ID_TOGGLE_WAVE_EDITOR, false);
+}
+  // Add a wave‐selector drop‐down to the toolbar
+  wxArrayString waveNames;
+  for(int i = 0; i < current_wave_count; ++i)
+    waveNames.Add(wxString::Format("Wave %d", i));
 
+  wave_choice = new wxChoice(toolbar, wxID_ANY,
+                             wxDefaultPosition, wxDefaultSize,
+                             waveNames);
+  wave_choice->SetSelection(current_wave);
+  // when the user picks a different wave, repaint the editor:
+  wave_choice->Bind(wxEVT_CHOICE, [this](wxCommandEvent&){
+    current_wave = wave_choice->GetSelection();
+    bitmap_window->Refresh();
+  });
+
+  // finally, insert it into the toolbar
+  toolbar->AddControl(wave_choice);
+
+  // add a spin control for wave count (1..32)
+  wave_count_ctrl = new wxSpinCtrl(toolbar,
+                                    ID_WAVE_COUNT,
+                                    wxEmptyString,
+                                    wxDefaultPosition,
+                                    wxDefaultSize,
+                                    wxSP_ARROW_KEYS,
+                                    1,    // min
+                                    32,   // max
+                                    current_wave_count);
+  toolbar->AddControl(wave_count_ctrl);
+ //wave_count_ctrl->SetToolTip(_("Adjust how many wave tables (1–32) are active in RAM"));
   CreateStatusBar();
 
   data_tree = new wxTreeCtrl(this, ID_DATA_TREE, wxDefaultPosition,
@@ -312,10 +446,14 @@ UPSFrame::UPSFrame(const wxString &title, const wxPoint &pos,
   data_tree_structs = data_tree->AppendItem(data_tree_root,
       _("Patch Structs"));
 
-  top_sizer = new wxBoxSizer(wxHORIZONTAL);
-  wxBoxSizer *left_sizer = new wxBoxSizer(wxVERTICAL);
-  right_sizer = new wxBoxSizer(wxVERTICAL);
-  wxBoxSizer *data_control_sizer = new wxBoxSizer(wxVERTICAL);
+   top_sizer      = new wxBoxSizer(wxHORIZONTAL);
+   wxBoxSizer* left_sizer   = new wxBoxSizer(wxVERTICAL);
+   right_sizer    = new wxBoxSizer(wxVERTICAL);
+   wxBoxSizer* right_column = new wxBoxSizer(wxVERTICAL);
+  
+  
+  
+  
   wxBoxSizer *data_control_sub_sizers[2] = {
     new wxBoxSizer(wxHORIZONTAL),
     new wxBoxSizer(wxHORIZONTAL),
@@ -333,6 +471,7 @@ UPSFrame::UPSFrame(const wxString &title, const wxPoint &pos,
   data_control_sub_sizers[1]->Add(
       new wxButton(this, ID_CLONE_DATA, _("Clone")));
 
+  wxBoxSizer *data_control_sizer = new wxBoxSizer(wxVERTICAL);
   data_control_sizer->Add(data_control_sub_sizers[0], 0, wxEXPAND);
   data_control_sizer->Add(data_control_sub_sizers[1], 0, wxEXPAND);
 
@@ -360,6 +499,15 @@ UPSFrame::UPSFrame(const wxString &title, const wxPoint &pos,
   patch_grid->DisableDragRowSize();
   patch_grid->EnableDragColMove();
 
+patch_grid->Bind(wxEVT_KILL_FOCUS, [this](wxFocusEvent& e){
+    // clear the blue selection highlight
+    patch_grid->ClearSelection();
+    // repaint every row so your red/green backgrounds are re‑applied
+    for(int r = 0; r < patch_grid->GetNumberRows(); ++r)
+        update_patch_row_colors(r);
+    e.Skip();
+});
+
   struct_grid = new UPSGrid(this, ID_STRUCT_GRID);
   struct_grid->CreateGrid(0, 5, wxGrid::wxGridSelectRows);
   struct_grid->SetColLabelValue(0, _("Type"));
@@ -374,14 +522,145 @@ UPSFrame::UPSFrame(const wxString &title, const wxPoint &pos,
   struct_grid->DisableDragRowSize();
   struct_grid->EnableDragColMove();
 
+
+
+
+bitmap_window = new wxScrolledWindow(this, wxID_ANY, wxDefaultPosition, wxSize(256, 256), wxHSCROLL | wxVSCROLL | wxBORDER_SIMPLE);
+bitmap_window->SetScrollRate(10, 10);
+bitmap_window->SetBackgroundColour(*wxWHITE);
+bitmap_window->SetBackgroundStyle(wxBG_STYLE_PAINT);
+
+bitmap_window->Bind(wxEVT_PAINT, [=](wxPaintEvent &) {
+    wxAutoBufferedPaintDC dc(bitmap_window);
+    dc.Clear();
+
+    int width = 256;
+    int height = 256;
+
+    int scaled_width = width * bitmap_scale;
+    int scaled_height = height * bitmap_scale;
+
+    // Draw gridlines
+    dc.SetPen(wxPen(wxColour(200, 200, 200))); // light gray grid
+    for (int x = 0; x < scaled_width; x += (int)(8 * bitmap_scale))
+        dc.DrawLine(x, 0, x, scaled_height);
+    for (int y = 0; y < scaled_height; y += (int)(8 * bitmap_scale))
+        dc.DrawLine(0, y, scaled_width, y);
+
+    // Draw axes
+    dc.SetPen(*wxBLACK_PEN);
+    dc.DrawLine(0, scaled_height / 2, scaled_width, scaled_height / 2); // X axis
+    dc.DrawLine(0, 0, 0, scaled_height); // Y axis
+
+    // Draw waveform
+    auto &table = waves_ram[current_wave];
+    dc.SetPen(*wxBLUE_PEN);
+    for (int i = 1; i < 256; ++i) {
+        int x1 = (i - 1) * bitmap_scale;
+        int y1 = scaled_height - (table[i - 1] * bitmap_scale);
+        int x2 = i * bitmap_scale;
+        int y2 = scaled_height - (table[i] * bitmap_scale);
+        dc.DrawLine(x1, y1, x2, y2);
+    }
+});
+
+bitmap_window->Bind(wxEVT_LEFT_DOWN, [=](wxMouseEvent &e) {
+    dragging_bitmap = true;
+    last_drag_point = e.GetPosition();
+    bitmap_window->CaptureMouse();
+
+    // Edit value
+    int x = e.GetX() / bitmap_scale;
+    int y = e.GetY() / bitmap_scale;
+    if (x >= 0 && x < 256) {
+         waves_ram[current_wave][x] = std::max(0, std::min(255, 255 - y));
+         last_draw_index = x;
+         last_draw_y     = y;
+         bitmap_window->Refresh();
+    }
+});
+
+bitmap_window->Bind(wxEVT_LEFT_DOWN, [=](wxMouseEvent &e) {
+    dragging_bitmap = true;
+    last_drag_point = e.GetPosition();
+    bitmap_window->CaptureMouse();
+});
+
+bitmap_window->Bind(wxEVT_LEFT_UP, [=](wxMouseEvent &) {
+    dragging_bitmap = false;
+    if (bitmap_window->HasCapture()) bitmap_window->ReleaseMouse();
+    last_draw_index = -1;
+});
+
+bitmap_window->Bind(wxEVT_MOTION, [=](wxMouseEvent &e) {
+    if (dragging_bitmap && e.Dragging() && e.LeftIsDown()) {
+        int x = e.GetX() / bitmap_scale;
+        int y = e.GetY() / bitmap_scale;
+        if (x >= 0 && x < 256) {
+             // fill every index between last_draw_index and x
+             int start = std::min(last_draw_index, x);
+             int end   = std::max(last_draw_index, x);
+             for (int xi = start; xi <= end; ++xi) {
+                 // simple linear interp of the mouse Y
+                 float t = (end == start) ? 0.0f
+                                           : float(xi - start) / float(end - start);
+                 int yi = int((1 - t) * last_draw_y + t * y);
+                 waves_ram[current_wave][xi] = std::max(0, std::min(255, 255 - yi));
+             }
+             last_draw_index = x;
+             last_draw_y     = y;
+            bitmap_window->Refresh();
+        }
+    }
+});
+
+
+
+wxBitmap bmp(32, 32);
+{
+    wxMemoryDC dc(bmp);
+    dc.SetBackground(*wxBLACK_BRUSH);
+    dc.Clear();
+
+    // Draw vertical gridlines every 8 pixels
+    dc.SetPen(wxPen(wxColour(50, 50, 50))); // dark gray
+    for (int x = 0; x < 32; x += 8)
+        dc.DrawLine(x, 0, x, 31);
+
+    // Draw horizontal gridlines every 8 pixels
+    for (int y = 0; y < 32; y += 8)
+        dc.DrawLine(0, y, 31, y);
+
+    // Draw sine wave
+    dc.SetPen(*wxGREEN_PEN);
+    for (int x = 0; x < 32; ++x) {
+        int y = 16 + (int)(15 * sin(x * 2.0 * M_PI / 32.0));
+        dc.DrawPoint(x, y);
+    }
+}
+show_bitmap(bmp);
+
+
+
   right_sizer->Add(command_control_sizer, 0, wxEXPAND);
   right_sizer->Add(patch_grid, wxEXPAND, wxEXPAND);
   right_sizer->Add(struct_grid, wxEXPAND, wxEXPAND);
 
-  top_sizer->Add(left_sizer, wxEXPAND, wxEXPAND);
-  top_sizer->Add(right_sizer, wxEXPAND, wxEXPAND);
+   // left column (tree + controls)
+   top_sizer->Add(left_sizer, 0, wxEXPAND|wxALL, 5);
 
-  top_sizer->Hide(1);
+   // right column: grids on top …
+   right_column->Add(right_sizer,   1, wxEXPAND|wxALL, 5);
+   // … wave editor below
+   right_column->Add(bitmap_window, 0, wxEXPAND|wxALL, 5);
+
+   // make that whole column fill remaining space
+   top_sizer->Add(right_column, 1, wxEXPAND);
+bitmap_window->Hide(); // Only show when needed
+
+  ///top_sizer->Hide(1);this crashes...
+
+
 
   SetSizer(top_sizer);
   update_layout();
@@ -408,6 +687,15 @@ UPSFrame::UPSFrame(const wxString &title, const wxPoint &pos,
 void UPSFrame::on_exit(wxCommandEvent &event) {
   (void) event;
   Close(true);
+}
+
+void UPSFrame::show_bitmap(const wxBitmap &bmp) {
+    bitmap = bmp;
+    bitmap_scale = 1.0f;
+    bitmap_window->SetVirtualSize(bitmap.GetWidth(), bitmap.GetHeight());
+    bitmap_window->Show();
+    update_layout();
+    bitmap_window->Refresh();
 }
 
 void UPSFrame::on_about(wxCommandEvent &event) {
@@ -455,12 +743,14 @@ void UPSFrame::on_data_tree_changed(wxTreeEvent &event) {
       top_sizer->Show(1, true);
       right_sizer->Show(1, true);
       right_sizer->Show(2, false);
+      bitmap_window->Hide();//hide the wave editor
     }
     else if (parent == data_tree_structs) {
       read_struct_data(item);
       top_sizer->Show(1, true);
       right_sizer->Show(1, false);
       right_sizer->Show(2, true);
+      bitmap_window->Hide();//hide the wave editor
     }
     else {
       top_sizer->Show(1, false);
@@ -489,7 +779,7 @@ void UPSFrame::on_new_struct(wxCommandEvent &event) {
   data_tree->SetItemData(c, new StructData());
   data_tree->SelectItem(c);
   data_tree->EditLabel(c);
-}
+} 
 
 void UPSFrame::on_rename(wxCommandEvent &event) {
   (void) event;
@@ -576,12 +866,17 @@ int UPSFrame::add_patch_command(const wxString &delay, const wxString &command,
   }
   patch_grid->SetCellEditor(row_num, 1, new wxGridCellChoiceEditor(16,
         command_choices, false));
-  patch_grid->SetCellValue(row_num, 0, delay);
-  patch_grid->SetCellValue(row_num, 1, command);
-  patch_grid->SetCellValue(row_num, 2, param);
+  patch_grid->SetCellValue(delay, row_num, 0);
+  patch_grid->SetCellValue(command, row_num, 1);
+  patch_grid->SetCellValue(param, row_num, 2);
 
+  ////update_patch_row_colors(row_num);
+  ////patch_grid->deselect_cells();
   update_patch_row_colors(row_num);
-  patch_grid->deselect_cells();
+  // clear *all* previous selections:
+  patch_grid->ClearSelection();
+  // then select just our new row
+  patch_grid->SelectRow(row_num, /* add = */ false);
 
   return row_num;
 }
@@ -989,6 +1284,143 @@ void UPSFrame::open_file(const wxString &path, bool importing) {
   }
 }
 
+void UPSFrame::open_music_file(const wxString &path) {
+}
+
+void UPSFrame::open_waves_file(const wxString &path) {
+  // 1) Read up to MAX_WAVES tables
+  size_t loaded = FileReader::read_waves(path, waves_ram, MAX_WAVES);
+
+  // 2) If fewer than DEFAULT_NUM_WAVES built-ins, zero-pad the rest
+  if (loaded < DEFAULT_NUM_WAVES) {
+    for (size_t i = loaded; i < DEFAULT_NUM_WAVES; ++i)
+      std::fill_n(waves_ram[i].begin(), WAVE_SIZE, 0);
+  }
+
+  // 3) Update count and refresh UI
+  current_wave_count = int(loaded);
+  if (loaded == 0) {
+    SetStatusText(wxString::Format(_("No wave data found in %s"), path));
+  } else {
+    wave_choice->Clear();
+    for (int i = 0; i < current_wave_count; ++i)
+      wave_choice->Append(wxString::Format("Wave %d", i));
+    wave_choice->SetSelection(0);
+    wave_count_ctrl->SetValue(current_wave_count);
+    bitmap_window->Refresh();
+    SetStatusText(wxString::Format(_("Loaded %zu waves from %s"), loaded, path));
+  }
+
+  // remember the path for “Save”
+  current_wave_path = path;
+}
+
+void UPSFrame::on_save_waves(wxCommandEvent &event) {
+  (void)event;
+  if (current_wave_path.IsEmpty()) {
+    on_save_waves_as(event);
+    return;
+  }
+  if (FileReader::write_waves(current_wave_path, waves_ram, current_wave_count))
+    SetStatusText(wxString::Format(_("Waves saved to %s"), current_wave_path));
+  else
+    SetStatusText(wxString::Format(_("Failed to save waves to %s"), current_wave_path));
+}
+
+// -----------------------------------------------------------------------------
+// Handler for “Save Wave File As…” (Ctrl+Shift+W)
+void UPSFrame::on_save_waves_as(wxCommandEvent &event) {
+  (void)event;
+  wxFileDialog dlg(this, _("Save Wave File As"), wxEmptyString,
+                   current_wave_path.IsEmpty() ? _("waves.inc") : current_wave_path,
+                   wxFileSelectorDefaultWildcardStr,
+                   wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+  if (dlg.ShowModal() == wxID_CANCEL)
+    return;
+
+  current_wave_path = dlg.GetPath();
+  if (FileReader::write_waves(current_wave_path, waves_ram, current_wave_count))
+    SetStatusText(wxString::Format(_("Waves saved to %s"), current_wave_path));
+  else
+    SetStatusText(wxString::Format(_("Failed to save waves to %s"), current_wave_path));
+}
+
+void UPSFrame::on_open_music(wxCommandEvent &evt) {
+  wxFileDialog dlg(this, _("Load Uzebox Music"), wxEmptyString, wxEmptyString,
+                   _("Music Files (*.inc)|*.inc|All Files|*.*"),
+                   wxFD_OPEN|wxFD_FILE_MUST_EXIST);
+  if (dlg.ShowModal() == wxID_CANCEL) return;
+
+  wxString path = dlg.GetPath();
+  if (!FileReader::read_music(path, musicData)) {
+    SetStatusText(wxString::Format(_("Failed to parse music in %s"), path));
+    return;
+  }
+
+  // The musicPlayer expects a PROGMEM array: we can hand it our vector directly.
+  // Assuming musicPlayerInit takes (const uint8_t *data, int length):
+  if (currentSong) {
+    // stop/cleanup any previous
+    musicPlayerStop();
+    delete currentSong;
+    currentSong = nullptr;
+  }
+  // Wrap our data into a SongData object:
+  currentSong = new SongData(musicData.data(), int(musicData.size()));
+  musicPlayerInit(currentSong);
+
+  SetStatusText(wxString::Format(_("Loaded %zu bytes of music from %s"),
+                                 musicData.size(), path));
+}
+
+bool FileReader::read_music(const wxString &fn, std::vector<uint8_t> &data) {
+  std::ifstream in(fn.mb_str());
+  if (!in.is_open()) return false;
+
+  std::string src((std::istreambuf_iterator<char>(in)),
+                   std::istreambuf_iterator<char>());
+  // strip C++ comments (reuse your clean_code):
+  src = clean_code(src);
+
+  std::smatch m;
+  if (!std::regex_search(src, m, music_decl))
+    return false;
+
+  // everything after the “{”
+  auto body = src.substr(m.position() + m.length());
+  std::stringstream ss(body);
+  std::string tok;
+  data.clear();
+
+  while (std::getline(ss, tok, ',')) {
+    // stop at the closing ‘}’
+    auto close = tok.find('}');
+    if (close != std::string::npos) {
+      tok = tok.substr(0, close);
+      if (tok.empty()) break;
+    }
+    // convert “0xAF” or decimal
+    int v = std::stol(tok, nullptr, 0);
+    data.push_back(uint8_t(v & 0xFF));
+    if (close != std::string::npos) break;
+  }
+
+  return !data.empty();
+}
+
+void UPSFrame::on_open_waves(wxCommandEvent &event) {
+  (void) event;
+
+  wxFileDialog file_dialog(this, _("Open"), wxEmptyString, wxEmptyString,
+      wxFileSelectorDefaultWildcardStr,
+      wxFD_OPEN | wxFD_FILE_MUST_EXIST | wxFD_CHANGE_DIR);
+
+  if (file_dialog.ShowModal() == wxID_CANCEL)
+    return;
+
+  open_waves_file(file_dialog.GetPath());
+}
+
 void UPSFrame::clear() {
   data_tree->DeleteChildren(data_tree_patches);
   data_tree->DeleteChildren(data_tree_structs);
@@ -1068,6 +1500,41 @@ void UPSFrame::on_stop_all(wxCommandEvent &event) {
   Mix_HaltChannel(-1);
 }
 
+void UPSFrame::on_start_music(wxCommandEvent &evt) {
+  if (!currentSong) {
+    SetStatusText(_("No music loaded to play"));
+    return;
+  }
+  // musicPlayerPlay(loopFlag)
+  musicPlayerPlay(/*loop=*/false);
+  SetStatusText(_("Playing music"));
+}
+
+void UPSFrame::on_stop_music(wxCommandEvent &evt) {
+  musicPlayerStop();
+  SetStatusText(_("Music stopped"));
+}
+
+void UPSFrame::on_toggle_wave_editor(wxCommandEvent& evt)
+{
+    bool show = GetToolBar()->GetToolState(ID_TOGGLE_WAVE_EDITOR);
+    // show/hide the window
+    bitmap_window->Show(show);
+    // re‑do the layout
+    Layout();          // or: this->GetSizer()->Layout();
+}
+
+void UPSFrame::on_zoom_slider(wxCommandEvent &evt) {
+    // each tick = integer zoom factor
+    bitmap_scale = float(evt.GetInt());
+    // resize the scrolled window’s virtual area
+    bitmap_window->SetVirtualSize(
+      int(bitmap.GetWidth()  * bitmap_scale),
+      int(bitmap.GetHeight() * bitmap_scale)
+    );
+    bitmap_window->Refresh();
+}
+
 int UPSFrame::add_struct_command(const wxString &type, const wxString &pcm,
     const wxString &patch, const wxString &loop_start,
     const wxString &loop_end, int pos) {
@@ -1087,12 +1554,12 @@ int UPSFrame::add_struct_command(const wxString &type, const wxString &pcm,
         patch_names.size(),
         &(wxVector<wxString>(patch_names.begin(), patch_names.end()))[0],
         true));
-  struct_grid->SetCellValue(row_num, 0, type);
-  struct_grid->SetCellValue(row_num, 1, pcm);
-  struct_grid->SetCellValue(row_num, 2, patch == wxEmptyString && patch_names.size()?
-      *(patch_names.begin()) : patch);
-  struct_grid->SetCellValue(row_num, 3, loop_start);
-  struct_grid->SetCellValue(row_num, 4, loop_end);
+  struct_grid->SetCellValue(type, row_num, 0);
+  struct_grid->SetCellValue(pcm, row_num, 1);
+  struct_grid->SetCellValue(patch == wxEmptyString && patch_names.size()?
+      *(patch_names.begin()) : patch, row_num, 2);
+  struct_grid->SetCellValue(loop_start, row_num, 3);
+  struct_grid->SetCellValue(loop_end, row_num, 4);
 
   update_struct_row_colors(row_num);
   struct_grid->deselect_cells();
@@ -1317,3 +1784,32 @@ void UPSFrame::replace_patch_in_struct(const wxTreeItemId &item,
     }
   }
 }
+
+void UPSFrame::on_wave_count_spin(wxSpinEvent &evt) {
+  int newCount = evt.GetInt();
+  if (newCount == current_wave_count) return;
+
+  // zero‐pad any new slots
+  if (newCount > current_wave_count) {
+    for (int i = current_wave_count; i < newCount; ++i)
+      std::fill_n(waves_ram[i].begin(), WAVE_SIZE, 0);
+  }
+
+  current_wave_count = newCount;
+
+  // rebuild the dropdown to exactly newCount entries
+  wave_choice->Clear();
+  for (int i = 0; i < current_wave_count; ++i)
+    wave_choice->Append(wxString::Format("Wave %d", i));
+
+  // clamp current_wave
+  if (current_wave >= current_wave_count)
+    current_wave = 0;
+  wave_choice->SetSelection(current_wave);
+
+  bitmap_window->Refresh();
+  SetStatusText(
+    wxString::Format(_("Wave count set to %d"), current_wave_count)
+  );
+}
+

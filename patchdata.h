@@ -21,8 +21,6 @@
 #define PC_LOOP_END 14
 #define PATCH_END 255
 
-#define NUM_WAVES 10
-
 #define EXTRA_TIME 60
 
 class PatchData : public wxTreeItemData {

@@ -1,3 +1,18 @@
+#pragma once
+
+#include <array>
+#include <cstdint>
+
+// how many built-in waves you ship with:
+static const int DEFAULT_NUM_WAVES = 10;
+// absolute upper cap for how many waves we can hold in RAM:
+static const int MAX_WAVES         = 32;
+// samples per wave
+static const int WAVE_SIZE         = 256;
+
+using WaveTable = std::array<uint8_t, WAVE_SIZE>;
+
+
 static const int8_t sine_wave[] = {
   0, 3, 6, 9, 12, 16, 19, 22, 25, 28, 31, 34, 37, 40, 43, 46, 49, 51, 54, 57,
   60, 63, 65, 68, 71, 73, 76, 78, 81, 83, 85, 88, 90, 92, 94, 96, 98, 100, 102,
@@ -203,15 +218,5 @@ static const int8_t filtered_50_square_wave[] = {
   -128, -121, -111, -99, -84, -60, -53, -44, -35, -14, -6, -6,
 };
 
-static const int8_t *waves[NUM_WAVES] = {
-  sine_wave,
-  up_sawtooth_wave,
-  triangle_wave,
-  square_25_wave,
-  square_50_wave,
-  square_75_wave,
-  sine_disto1_wave,
-  sine_disto2_wave,
-  sine_disto3_wave,
-  filtered_50_square_wave,
-};
+extern WaveTable           waves_ram[MAX_WAVES];
+extern const int8_t *const builtin_waves[DEFAULT_NUM_WAVES];
