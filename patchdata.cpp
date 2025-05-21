@@ -256,7 +256,7 @@ bool PatchData::generate_wave(wxVector<uint8_t> &out_data) {
 
       case PC_WAVE:
         wave = data[i+2];
-        if (wave < 0 || wave >= NUM_WAVES) {
+        if (wave < 0 || wave >= MAX_WAVES) {
           last_error = wxString::Format(_("Command %lu: Invalid wave"), i/3+1);
           return false;
         }

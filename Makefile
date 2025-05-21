@@ -1,5 +1,7 @@
 CXXFLAGS=-Wall -Wextra -O2 `wx-config --cflags`
 CXXFLAGS+=`sdl2-config --cflags`
+CXXFLAGS += -Wno-deprecated-copy
+
 LDLIBS=`wx-config --libs` `sdl2-config --libs` -lstdc++ -lm
 OBJECTS=uzebox-patch-studio.o upsgrid.o filereader.o patchdata.o structdata.o
 

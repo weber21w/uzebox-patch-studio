@@ -161,7 +161,7 @@ class UPSFrame: public wxFrame {
     int              last_draw_index = -1;
     int              last_draw_y     = 0;
      int current_wave = 0;
-     void on_wave_count_spin(wxSpinEvent &evt);
+     void on_wave_count_spin(wxSpinEvent &event);
      /// how many waves are currently valid in waves_ram[]
      int current_wave_count = DEFAULT_NUM_WAVES;  // default built-in count (10)
     wxChoice *wave_choice;
@@ -1285,6 +1285,7 @@ void UPSFrame::open_file(const wxString &path, bool importing) {
 }
 
 void UPSFrame::open_music_file(const wxString &path) {
+(void)path;
 }
 
 void UPSFrame::open_waves_file(const wxString &path) {
@@ -1345,12 +1346,13 @@ void UPSFrame::on_save_waves_as(wxCommandEvent &event) {
     SetStatusText(wxString::Format(_("Failed to save waves to %s"), current_wave_path));
 }
 
-void UPSFrame::on_open_music(wxCommandEvent &evt) {
+void UPSFrame::on_open_music(wxCommandEvent &event) {
+  (void)event;
   wxFileDialog dlg(this, _("Load Uzebox Music"), wxEmptyString, wxEmptyString,
                    _("Music Files (*.inc)|*.inc|All Files|*.*"),
                    wxFD_OPEN|wxFD_FILE_MUST_EXIST);
   if (dlg.ShowModal() == wxID_CANCEL) return;
-
+/*
   wxString path = dlg.GetPath();
   if (!FileReader::read_music(path, musicData)) {
     SetStatusText(wxString::Format(_("Failed to parse music in %s"), path));
@@ -1371,45 +1373,11 @@ void UPSFrame::on_open_music(wxCommandEvent &evt) {
 
   SetStatusText(wxString::Format(_("Loaded %zu bytes of music from %s"),
                                  musicData.size(), path));
-}
-
-bool FileReader::read_music(const wxString &fn, std::vector<uint8_t> &data) {
-  std::ifstream in(fn.mb_str());
-  if (!in.is_open()) return false;
-
-  std::string src((std::istreambuf_iterator<char>(in)),
-                   std::istreambuf_iterator<char>());
-  // strip C++ comments (reuse your clean_code):
-  src = clean_code(src);
-
-  std::smatch m;
-  if (!std::regex_search(src, m, music_decl))
-    return false;
-
-  // everything after the “{”
-  auto body = src.substr(m.position() + m.length());
-  std::stringstream ss(body);
-  std::string tok;
-  data.clear();
-
-  while (std::getline(ss, tok, ',')) {
-    // stop at the closing ‘}’
-    auto close = tok.find('}');
-    if (close != std::string::npos) {
-      tok = tok.substr(0, close);
-      if (tok.empty()) break;
-    }
-    // convert “0xAF” or decimal
-    int v = std::stol(tok, nullptr, 0);
-    data.push_back(uint8_t(v & 0xFF));
-    if (close != std::string::npos) break;
-  }
-
-  return !data.empty();
+*/
 }
 
 void UPSFrame::on_open_waves(wxCommandEvent &event) {
-  (void) event;
+  (void)event;
 
   wxFileDialog file_dialog(this, _("Open"), wxEmptyString, wxEmptyString,
       wxFileSelectorDefaultWildcardStr,
@@ -1500,23 +1468,28 @@ void UPSFrame::on_stop_all(wxCommandEvent &event) {
   Mix_HaltChannel(-1);
 }
 
-void UPSFrame::on_start_music(wxCommandEvent &evt) {
-  if (!currentSong) {
+void UPSFrame::on_start_music(wxCommandEvent &event) {
+    (void)event;
+//  if (!currentSong) {
     SetStatusText(_("No music loaded to play"));
     return;
-  }
-  // musicPlayerPlay(loopFlag)
-  musicPlayerPlay(/*loop=*/false);
+//  }
+/*
+  musicPlayerPlay();//loop = false
+*/
   SetStatusText(_("Playing music"));
 }
 
-void UPSFrame::on_stop_music(wxCommandEvent &evt) {
+void UPSFrame::on_stop_music(wxCommandEvent &event) {
+  (void)event;
+/*
   musicPlayerStop();
+*/
   SetStatusText(_("Music stopped"));
 }
 
-void UPSFrame::on_toggle_wave_editor(wxCommandEvent& evt)
-{
+void UPSFrame::on_toggle_wave_editor(wxCommandEvent& event) {
+    (void)event;
     bool show = GetToolBar()->GetToolState(ID_TOGGLE_WAVE_EDITOR);
     // show/hide the window
     bitmap_window->Show(show);
@@ -1524,9 +1497,9 @@ void UPSFrame::on_toggle_wave_editor(wxCommandEvent& evt)
     Layout();          // or: this->GetSizer()->Layout();
 }
 
-void UPSFrame::on_zoom_slider(wxCommandEvent &evt) {
+void UPSFrame::on_zoom_slider(wxCommandEvent &event) {
     // each tick = integer zoom factor
-    bitmap_scale = float(evt.GetInt());
+    bitmap_scale = float(event.GetInt());
     // resize the scrolled window’s virtual area
     bitmap_window->SetVirtualSize(
       int(bitmap.GetWidth()  * bitmap_scale),
@@ -1785,8 +1758,8 @@ void UPSFrame::replace_patch_in_struct(const wxTreeItemId &item,
   }
 }
 
-void UPSFrame::on_wave_count_spin(wxSpinEvent &evt) {
-  int newCount = evt.GetInt();
+void UPSFrame::on_wave_count_spin(wxSpinEvent &event) {
+  int newCount = event.GetInt();
   if (newCount == current_wave_count) return;
 
   // zero‐pad any new slots
